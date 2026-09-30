@@ -1,42 +1,111 @@
+"""
+task_manager_ai_native.py
+Versión corregida y refactorizada - Taller AI-Native Software Engineer
+
+Mejoras principales introducidas:
+1. Seguridad / Aislamiento: `list_tasks` solo devuelve las tareas del usuario especificado.
+2. Sincronización de índices: Se implementó un mapeo de referencias para asegurar que
+   el índice de la interfaz (relativo al usuario) modifique/elimine la tarea correcta
+   en la lista global `tasks`.
+3. Validaciones robustas: Se previenen títulos vacíos y conversiones fallidas de índices.
+4. Manejo de excepciones claro: La GUI captura errores específicos y muestra alertas
+   informativas al usuario mediante `messagebox`.
+"""
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 
+# Estructura de almacenamiento global de tareas
 tasks = []
 
 
+# ==============================================================================
+# LÓGICA DE NEGOCIO Y OPERACIONES DE TAREAS (BACKEND)
+# ==============================================================================
+
 def add_task(title, user):
+    """
+    Crea una nueva tarea asociándola al usuario proporcionado.
+    
+    Mejora introducida: Validar que el título no esté vacío ni contenga solo espacios.
+    """
+    title_clean = title.strip()
+    if not title_clean:
+        raise ValueError("El título de la tarea no puede estar vacío.")
+
     tasks.append({
-        "title": title,
+        "title": title_clean,
         "user": user,
         "completed": False
     })
 
 
 def list_tasks(user):
-    return tasks
+    """
+    Retorna únicamente las tareas pertenecientes al usuario especificado.
+    
+    Mejora introducida (Seguridad):
+    Anteriormente devolvía la lista global `tasks` completa. Ahora filtra usando
+    comprensión de listas para garantizar el aislamiento de datos por usuario.
+    """
+    return [task for task in tasks if task["user"] == user]
+
+
+def _get_user_task_reference(index, user):
+    """
+    Función auxiliar para resolver la incoherencia de índices entre la vista filtrada y la lista global.
+    
+    DECISIÓN DEL DESARROLLADOR:
+    Para evitar alterar la estructura simple de la lista global agregando UUIDs o IDs complejos,
+    se obtiene la vista filtrada de las tareas del usuario (`user_tasks`) y se extrae la referencia
+    directa al objeto diccionario en la posición relativa `index`. Esto garantiza que la modificación
+    o eliminación opere sobre el objeto exacto en la lista global `tasks`.
+    """
+    if not isinstance(index, int):
+        raise TypeError("El índice debe ser un número entero.")
+
+    user_tasks = list_tasks(user)
+
+    if index < 0 or index >= len(user_tasks):
+        raise IndexError(f"El índice {index} no existe para las tareas de '{user}'.")
+
+    # Retorna la referencia del diccionario original perteneciente al usuario
+    return user_tasks[index]
 
 
 def complete_task(index, user):
-    # Usa la lista visible para el usuario actual.
-    # Cuando list_tasks() sea corregida, esta operación también
-    # quedará limitada a sus propias tareas.
-    user_tasks = list_tasks(user)
-    user_tasks[index]["completed"] = True
-    return "Tarea completada"
+    """
+    Marca como completada la tarea del usuario indicada por su índice relativo.
+    
+    Mejora introducida: Utiliza `_get_user_task_reference` para garantizar que solo se
+    pueda modificar una tarea perteneciente al usuario autenticado.
+    """
+    target_task = _get_user_task_reference(index, user)
+    target_task["completed"] = True
+    return f"Tarea '{target_task['title']}' completada exitosamente."
 
 
 def delete_task(index, user):
-    # Usa la lista visible para el usuario actual.
-    user_tasks = list_tasks(user)
-    user_tasks.pop(index)
-    return "Tarea eliminada"
+    """
+    Elimina de la lista global la tarea del usuario indicada por su índice relativo.
+    
+    Mejora introducida: Obtiene la referencia real de la tarea del usuario y la remueve
+    de la lista global `tasks`, evitando eliminar tareas ajenas.
+    """
+    target_task = _get_user_task_reference(index, user)
+    tasks.remove(target_task)
+    return f"Tarea '{target_task['title']}' eliminada exitosamente."
 
+
+# ==============================================================================
+# INTERFAZ GRÁFICA DE USUARIO (TKINTER GUI)
+# ==============================================================================
 
 class TaskManagerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Task Manager")
+        self.root.title("Task Manager - AI-Native Edition")
         self.root.geometry("920x620")
         self.root.minsize(820, 560)
 
@@ -82,7 +151,7 @@ class TaskManagerApp:
 
         ttk.Label(
             header,
-            text="Aplicación de gestión de tareas",
+            text="Aplicación segura de gestión de tareas por usuario",
             style="Subtitle.TLabel"
         ).pack(anchor="w", pady=(2, 0))
 
@@ -100,8 +169,6 @@ class TaskManagerApp:
         users_frame = ttk.Frame(user_box)
         users_frame.grid(row=0, column=1, sticky="w")
 
-        # Tres usuarios disponibles. Aunque visualmente son Checkbuttons,
-        # el programa mantiene solo un usuario activo a la vez.
         for column, user in enumerate(("ana", "jorge", "jojo")):
             ttk.Checkbutton(
                 users_frame,
@@ -225,7 +292,7 @@ class TaskManagerApp:
 
         ttk.Label(
             actions,
-            text="Seleccione una tarea o escriba directamente su índice.",
+            text="Seleccione una tarea de la lista o escriba directamente su número (#).",
             wraplength=420
         ).grid(
             row=1,
@@ -253,7 +320,6 @@ class TaskManagerApp:
         ).pack(side="right")
 
     def select_user(self, selected_user):
-        # Mantiene una sola casilla activa y actualiza inmediatamente la lista.
         self.current_user.set(selected_user)
 
         for user, variable in self.user_vars.items():
@@ -263,48 +329,61 @@ class TaskManagerApp:
         self.refresh_tasks()
 
     def create_task(self):
+        """
+        Crea una nueva tarea e incluye manejo de errores de validación mediante GUI.
+        """
         title = self.task_title.get()
         user = self.current_user.get()
 
-        add_task(title, user)
-
-        self.task_title.set("")
-        self.refresh_tasks()
-
-        self.status_text.set(
-            f"Tarea creada para el usuario: {user}"
-        )
+        try:
+            add_task(title, user)
+            self.task_title.set("")
+            self.refresh_tasks()
+            self.status_text.set(f"Tarea creada para el usuario: {user}")
+        except ValueError as err:
+            messagebox.showwarning("Título inválido", str(err))
 
     def get_index(self):
-        return int(self.task_index.get())
+        """
+        Sanitiza y valida la entrada del campo de índice antes de convertirlo a entero.
+        Evita un ValueError no controlado si el usuario ingresa texto o deja el campo vacío.
+        """
+        raw_val = self.task_index.get().strip()
+        if not raw_val:
+            raise ValueError("Por favor seleccione una tarea o introduzca un índice.")
+        if not raw_val.isdigit():
+            raise ValueError("El índice debe ser un número entero válido (0, 1, 2...).")
+        return int(raw_val)
 
     def complete_selected(self):
+        """
+        Maneja la acción de completar una tarea seleccionada capturando excepciones específicas.
+        """
         user = self.current_user.get()
-        index = self.get_index()
 
         try:
+            index = self.get_index()
             result = complete_task(index, user)
+            self.task_index.set("")
             self.refresh_tasks()
             self.status_text.set(result)
-        except Exception as error:
-            messagebox.showerror(
-                "Error durante la operación",
-                f"{type(error).__name__}: {error}"
-            )
+        except (ValueError, IndexError, TypeError) as error:
+            messagebox.showerror("Error en la operación", str(error))
 
     def delete_selected(self):
+        """
+        Maneja la acción de eliminar una tarea seleccionada capturando excepciones específicas.
+        """
         user = self.current_user.get()
-        index = self.get_index()
 
         try:
+            index = self.get_index()
             result = delete_task(index, user)
+            self.task_index.set("")
             self.refresh_tasks()
             self.status_text.set(result)
-        except Exception as error:
-            messagebox.showerror(
-                "Error durante la operación",
-                f"{type(error).__name__}: {error}"
-            )
+        except (ValueError, IndexError, TypeError) as error:
+            messagebox.showerror("Error en la operación", str(error))
 
     def on_task_selected(self, event=None):
         selected = self.tree.selection()
@@ -318,18 +397,15 @@ class TaskManagerApp:
             self.task_index.set(values[0])
 
     def refresh_tasks(self):
+        """
+        Refresca la tabla del Treeview mostrando ÚNICAMENTE las tareas del usuario actual.
+        """
         for item in self.tree.get_children():
             self.tree.delete(item)
 
         user = self.current_user.get()
-
-        # ========================================================
-        # PROBLEMA INTENCIONAL DEL TALLER
-        # ========================================================
-        # La interfaz ya conoce el usuario actual, pero la función
-        # list_tasks() todavía devuelve todas las tareas.
-        # El estudiante debe corregir esta parte para que solo se
-        # muestren las tareas del usuario seleccionado.
+        
+        # Ahora list_tasks(user) devuelve únicamente las tareas pertenecientes al usuario actual.
         visible_tasks = list_tasks(user)
 
         for i, task in enumerate(visible_tasks):
@@ -339,7 +415,7 @@ class TaskManagerApp:
                 "",
                 "end",
                 values=(
-                    i,
+                    i,  # Índice relativo al listado del usuario
                     task["title"],
                     task["user"],
                     status
@@ -347,7 +423,7 @@ class TaskManagerApp:
             )
 
         self.status_text.set(
-            f"Usuario actual: {user} | Tareas mostradas: {len(visible_tasks)}"
+            f"Usuario actual: {user} | Mis tareas: {len(visible_tasks)}"
         )
 
 
